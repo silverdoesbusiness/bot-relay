@@ -210,13 +210,16 @@ jobs:
             local msg="$1"
             python -c "
 import urllib.request, urllib.parse, json
-token = '8666866491:AAHSm4qS4oc35vf4I0rUc9gEGqUHYV3SS4o'
-chat_id = '8512281477'
-text = '''$msg'''
-url = f'https://api.telegram.org/bot{token}/sendMessage'
-data = urllib.parse.urlencode({'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}).encode()
 try:
-    urllib.request.urlopen(url, data=data, timeout=8)
+    with open('filessss/telegram_forwarder/config.json', 'r') as f:
+        cfg = json.load(f)
+    token = cfg.get('bot_token')
+    chat_id = str(cfg.get('owner_id', ''))
+    if token and chat_id:
+        text = '''$msg'''
+        url = f'https://api.telegram.org/bot{token}/sendMessage'
+        data = urllib.parse.urlencode({'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}).encode()
+        urllib.request.urlopen(url, data=data, timeout=8)
 except Exception:
     pass
 " 2>/dev/null || true
