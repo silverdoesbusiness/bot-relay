@@ -195,21 +195,7 @@ jobs:
 
           send_tg_alert() {
             local msg="$1"
-            python -c "
-import urllib.request, urllib.parse, json
-try:
-    with open('filessss/telegram_forwarder/config.json', 'r') as f:
-        cfg = json.load(f)
-    token = cfg.get('bot_token')
-    chat_id = str(cfg.get('owner_id', ''))
-    if token and chat_id:
-        text = '''$msg'''
-        url = f'https://api.telegram.org/bot{token}/sendMessage'
-        data = urllib.parse.urlencode({'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}).encode()
-        urllib.request.urlopen(url, data=data, timeout=8)
-except Exception:
-    pass
-" 2>/dev/null || true
+            python3 -c "import urllib.request, urllib.parse, json, sys; cfg=json.load(open('filessss/telegram_forwarder/config.json')); t=cfg.get('bot_token'); c=cfg.get('owner_id'); data=urllib.parse.urlencode({'chat_id': c, 'text': sys.argv[1], 'parse_mode': 'HTML'}).encode(); urllib.request.urlopen(f'https://api.telegram.org/bot{t}/sendMessage', data=data, timeout=8)" "$msg" 2>/dev/null || true
           }
 
           if dispatch_runner "$PRIMARY_TARGET" "$NEXT_PAT"; then
