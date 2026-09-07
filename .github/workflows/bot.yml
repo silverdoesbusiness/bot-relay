@@ -13,8 +13,6 @@ on:
         required: false
         default: '0'
         type: string
-  repository_dispatch:
-    types: [start-relay]
 
 jobs:
   bot-relay:
@@ -44,6 +42,7 @@ jobs:
       - name: Predecessor Handshake & Conflict Prevention
         env:
           PREV_PAT: ${{ secrets.PREV_PAT }}
+          CYCLE_COUNT: ${{ github.event.inputs.cycle_count }}
         run: |
           REPOS=(
             "nova-matrix1/bot-relay"
@@ -97,7 +96,7 @@ jobs:
       - name: Launch MasterBot Supervisor Daemon
         env:
           FIREBASE_KEY_B64: ${{ secrets.FIREBASE_KEY_B64 }}
-          CYCLE_COUNT: ${{ github.event.client_payload.cycle_count || github.event.inputs.cycle_count || '0' }}
+          CYCLE_COUNT: ${{ github.event.inputs.cycle_count }}
         run: |
           cd filessss/telegram_forwarder
           echo "Starting daemon.py in background..."
@@ -120,8 +119,8 @@ jobs:
         env:
           NEXT_PAT: ${{ secrets.NEXT_PAT }}
           FALLBACK_PAT: ${{ secrets.FALLBACK_PAT }}
-          CYCLE_COUNT: ${{ github.event.client_payload.cycle_count || github.event.inputs.cycle_count || '0' }}
-          TEST_HANDOVER: ${{ github.event.client_payload.test_handover || github.event.inputs.test_handover || '0' }}
+          CYCLE_COUNT: ${{ github.event.inputs.cycle_count }}
+          TEST_HANDOVER: ${{ github.event.inputs.test_handover }}
         run: |
           echo "==========================================================="
           echo "  MasterBot Cloud Node Active: ${GITHUB_REPOSITORY} (Cycle: ${CYCLE_COUNT})"
@@ -185,23 +184,11 @@ jobs:
             local token="$2"
             for attempt in 1 2 3 4; do
               echo "Dispatch attempt $attempt to ${target}..."
-              # Dual dispatch: try repository_dispatch first (immune to 422), fallback to workflow run
-              if GH_TOKEN="$token" gh api repos/"$target"/dispatches \
-                -X POST \
-                -f event_type="start-relay" \
-                -F "client_payload[cycle_count]=$NEXT_CYCLE" 2>/dev/null; then
-                echo "Successfully triggered via repository_dispatch on ${target}."
+              if GH_TOKEN="$token" gh workflow run bot.yml                 --repo "$target"                 -f cycle_count="$NEXT_CYCLE"                 -f test_handover="0"; then
+                echo "Successfully triggered workflow on ${target}."
                 return 0
               fi
-
-              if GH_TOKEN="$token" gh workflow run bot.yml \
-                --repo "$target" \
-                -f cycle_count="$NEXT_CYCLE" \
-                -f test_handover="0" 2>/dev/null; then
-                echo "Successfully triggered via workflow_dispatch on ${target}."
-                return 0
-              fi
-              sleep 10
+              sleep 15
             done
             return 1
           }
@@ -226,13 +213,11 @@ except Exception:
           }
 
           if dispatch_runner "$PRIMARY_TARGET" "$NEXT_PAT"; then
-            send_tg_alert "🔄 <b>[MasterBot Relay Handover]</b>%0ACycle: <code>#${NEXT_CYCLE}</code>%0AFrom: <code>${GITHUB_REPOSITORY}</code>%0ANext Active Node: <code>${PRIMARY_TARGET}</code> ✅"
+            send_tg_alert "MasterBot Relay Handover Cycle: #${NEXT_CYCLE} -> Next Active Node: ${PRIMARY_TARGET}"
           else
-            echo "Primary dispatch to ${PRIMARY_TARGET} failed. Engaging fallback to ${FALLBACK_TARGET}..."
+            echo "Primary dispatch failed. Engaging fallback..."
             if dispatch_runner "$FALLBACK_TARGET" "$FALLBACK_PAT"; then
-              send_tg_alert "⚠️ <b>[MasterBot Fallback Handover]</b>%0ACycle: <code>#${NEXT_CYCLE}</code>%0APrimary Failed! Activated fallback: <code>${FALLBACK_TARGET}</code>"
-            else
-              send_tg_alert "🚨 <b>[CRITICAL RELAY FAILURE]</b>%0AAll successor dispatches failed on ${GITHUB_REPOSITORY}!"
+              send_tg_alert "MasterBot Fallback Handover Cycle: #${NEXT_CYCLE} -> ${FALLBACK_TARGET}"
             fi
           fi
 
