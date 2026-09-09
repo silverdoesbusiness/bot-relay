@@ -1,4 +1,4 @@
-name: Python Bot Relay Node
+name: Python Fleet & Bot Hosting Node
 
 on:
   workflow_dispatch:
@@ -9,14 +9,14 @@ on:
         default: '0'
         type: string
       test_handover:
-        description: 'Test mode: hand over after X minutes (0 for normal 345m)'
+        description: 'Test mode: hand over after X minutes (0 for normal 330m)'
         required: false
         default: '0'
         type: string
 
 jobs:
   bot-relay:
-    name: Run Python Telegram Forwarder & Bots
+    name: Run Python Telegram Forwarder & Hosting Supervisor
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -29,21 +29,15 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Clone Private Filessss Repository
-        env:
-          CLONE_PAT: ${{ secrets.CLONE_PAT }}
-        run: |
-          git config --global user.name "Silver-kun"
-          git config --global user.email "silver-kun@users.noreply.github.com"
-          git clone https://${CLONE_PAT}@github.com/Silver-kun/Filessss.git filessss
-          echo "Cloned Filessss folders:"
-          ls -la filessss/
-
+      # =====================================================================
+      # STEP 1: PREDECESSOR HANDSHAKE & CONFLICT PREVENTION
+      # =====================================================================
       - name: Predecessor Handshake & Conflict Prevention
         env:
           PREV_PAT: ${{ secrets.PREV_PAT }}
           CYCLE_COUNT: ${{ github.event.inputs.cycle_count }}
         run: |
+          echo "=== Predecessor Handshake & Conflict Prevention ==="
           REPOS=(
             "nova-matrix1/bot-relay"
             "silverdoesbusiness/bot-relay"
@@ -70,8 +64,8 @@ jobs:
               echo "Gracefully cancelling predecessor to release Telegram sessions..."
               GH_TOKEN="$PREV_PAT" gh run cancel "$PREV_RUN_ID" --repo "$PREV_REPO" 2>/dev/null || true
 
-              for sec in {1..15}; do
-                RUN_STATUS=$(GH_TOKEN="$PREV_PAT" gh run view "$PREV_RUN_ID" --repo "$PREV_REPO" --json status -q '.status' 2>/dev/null || echo "completed")
+              for sec in {1..20}; do
+                RUN_STATUS=$(GH_TOKEN="$PREV_PAT" gh run view "$PREV_RUN_ID" --repo "$PREV_REPO" --json status -q '.status' 2>/dev/null || echo "")
                 if [ "$RUN_STATUS" != "in_progress" ]; then
                   echo "Predecessor terminated cleanly in ${sec}s."
                   break
@@ -84,80 +78,152 @@ jobs:
             fi
           fi
 
+      # =====================================================================
+      # STEP 2: CLONE PRIVATE FILESSSS REPO
+      # =====================================================================
+      - name: Clone Private Filessss Repository
+        env:
+          CLONE_PAT: ${{ secrets.CLONE_PAT }}
+        run: |
+          echo "=== Cloning Central Repository ==="
+          git config --global user.name "Silver-kun"
+          git config --global user.email "silver-kun@users.noreply.github.com"
+          git clone "https://${CLONE_PAT}@github.com/Silver-kun/Filessss.git" filessss
+          echo "Cloned Filessss successfully."
+
+      # =====================================================================
+      # STEP 3: INSTALL DEPENDENCIES & SDks
+      # =====================================================================
       - name: Install Dependencies & SDKs
         run: |
+          echo "=== Installing Host & Supervisor Dependencies ==="
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq curl zip unzip psmisc
           python -m pip install --upgrade pip
-          pip install firebase-admin
-          if [ -f filessss/telegram_forwarder/requirements.txt ]; then
-            echo "Installing requirements for telegram_forwarder..."
-            pip install -r filessss/telegram_forwarder/requirements.txt
+          pip install pyTelegramBotAPI requests cryptography flask APScheduler PyGithub psutil Pillow curl_cffi telethon pyrogram tgcrypto aiohttp
+
+          # Install extra dependencies from hosting requirements if needed
+          if [ -f filessss/telegram_forwarder/hosting/requirements.txt ]; then
+            pip install -r filessss/telegram_forwarder/hosting/requirements.txt
           fi
 
-      - name: Launch MasterBot Supervisor Daemon
-        env:
-          FIREBASE_KEY_B64: ${{ secrets.FIREBASE_KEY_B64 }}
-          CYCLE_COUNT: ${{ github.event.inputs.cycle_count }}
+      # =====================================================================
+      # STEP 4: RESTORE FLEET PERSISTENCE STATE (STORAGE & SANDBOX)
+      # =====================================================================
+      - name: Restore Fleet State
         run: |
-          cd filessss/telegram_forwarder
-          echo "Starting daemon.py in background..."
-          python -u daemon.py > daemon.log 2>&1 &
-          DAEMON_PID=$!
-          echo $DAEMON_PID > /tmp/daemon.pid
-          echo "Launched MasterDaemon with PID $DAEMON_PID"
+          echo "=== Restoring Fleet State (Bots, DBs, Sessions) ==="
+          HOSTING_DIR="filessss/telegram_forwarder/hosting"
+          mkdir -p "$HOSTING_DIR/storage" "$HOSTING_DIR/sandbox"
+
+          if [ -f filessss/fleet_state.zip ]; then
+            echo "Found previous fleet_state.zip. Unpacking..."
+            unzip -q -o filessss/fleet_state.zip -d "$HOSTING_DIR" || true
+            echo "State unpacked successfully:"
+            ls -la "$HOSTING_DIR/storage" 2>/dev/null || true
+            ls -la "$HOSTING_DIR/sandbox" 2>/dev/null || true
+          else
+            echo "No prior fleet_state.zip found. Initializing fresh storage baseline."
+          fi
+
+      # =====================================================================
+      # STEP 5: LAUNCH HOSTING SUPERVISOR
+      # =====================================================================
+      - name: Launch Hosting Supervisor
+        run: |
+          echo "=== Launching Hosting Supervisor ==="
+          cd filessss/telegram_forwarder/hosting
+          python -u bot.py > panel.log 2>&1 &
+          PANEL_PID=$!
+          echo $PANEL_PID > /tmp/panel.pid
+          echo "Launched Hosting Supervisor with PID $PANEL_PID"
 
           sleep 5
-          if kill -0 $DAEMON_PID 2>/dev/null; then
-            echo "MasterDaemon is running smoothly!"
-            head -n 20 daemon.log || true
+          if kill -0 $PANEL_PID 2>/dev/null; then
+            echo "Hosting Supervisor is running smoothly!"
+            head -n 25 panel.log || true
           else
-            echo "Warning: Daemon exited early. Log output:"
-            cat daemon.log
+            echo "Warning: Supervisor exited early. Log output:"
+            cat panel.log
             exit 1
           fi
 
+      # =====================================================================
+      # STEP 6: 330m PRODUCTION SHIFT & WATCHDOG
+      # =====================================================================
       - name: Maintenance Loop & Automated Successor Handover
         env:
+          CLONE_PAT: ${{ secrets.CLONE_PAT }}
           NEXT_PAT: ${{ secrets.NEXT_PAT }}
           FALLBACK_PAT: ${{ secrets.FALLBACK_PAT }}
           CYCLE_COUNT: ${{ github.event.inputs.cycle_count }}
           TEST_HANDOVER: ${{ github.event.inputs.test_handover }}
         run: |
           echo "==========================================================="
-          echo "  MasterBot Cloud Node Active: ${GITHUB_REPOSITORY} (Cycle: ${CYCLE_COUNT})"
+          echo "  Hosting Fleet Node Active: ${GITHUB_REPOSITORY} (Cycle: ${CYCLE_COUNT})"
           echo "==========================================================="
 
-          HANDOVER_MINUTE=345
+          HANDOVER_MINUTE=330
           if [ -n "$TEST_HANDOVER" ] && [ "$TEST_HANDOVER" -gt 0 ] 2>/dev/null; then
             echo ">>> TEST HANDOVER OVERRIDE: ${TEST_HANDOVER} minute(s) <<<"
             HANDOVER_MINUTE=$TEST_HANDOVER
           fi
 
           ELAPSED=0
-          DAEMON_PID=$(cat /tmp/daemon.pid 2>/dev/null || echo "")
+          PANEL_PID=$(cat /tmp/panel.pid 2>/dev/null || echo "")
 
           while [ $ELAPSED -lt $HANDOVER_MINUTE ]; do
             sleep 60
             ELAPSED=$((ELAPSED + 1))
 
-            # Auto-restart daemon if crashed
-            if [ -n "$DAEMON_PID" ] && ! kill -0 $DAEMON_PID 2>/dev/null; then
-              echo "[$(date +'%T')] Daemon died unexpectedly. Restarting..."
-              cd ${GITHUB_WORKSPACE}/filessss/telegram_forwarder
-              python -u daemon.py >> daemon.log 2>&1 &
-              DAEMON_PID=$!
-              echo $DAEMON_PID > /tmp/daemon.pid
+            # Auto-restart supervisor if crashed
+            if [ -n "$PANEL_PID" ] && ! kill -0 $PANEL_PID 2>/dev/null; then
+              echo "[$(date +'%T')] Supervisor died unexpectedly. Restarting..."
+              cd ${GITHUB_WORKSPACE}/filessss/telegram_forwarder/hosting
+              python -u bot.py >> panel.log 2>&1 &
+              PANEL_PID=$!
+              echo $PANEL_PID > /tmp/panel.pid
             fi
 
             if [ $((ELAPSED % 15)) -eq 0 ] || [ $HANDOVER_MINUTE -le 10 ]; then
-              echo "[$(date +'%T')] Heartbeat: Elapsed ${ELAPSED}/${HANDOVER_MINUTE}m | Daemon PID $DAEMON_PID alive."
+              echo "[$(date +'%T')] Heartbeat: Elapsed ${ELAPSED}/${HANDOVER_MINUTE}m | Supervisor PID $PANEL_PID active"
             fi
           done
 
           echo "==========================================================="
           echo "  HANDOVER THRESHOLD REACHED (Minute ${HANDOVER_MINUTE})"
-          echo "  Triggering next ring successor..."
+          echo "  Executing Graceful Shutdown & State Backup..."
           echo "==========================================================="
 
+          # 1. Gracefully stop supervisor and child bots
+          if [ -n "$PANEL_PID" ]; then
+            echo "Sending SIGTERM to Hosting Supervisor (PID $PANEL_PID)..."
+            kill -15 $PANEL_PID 2>/dev/null || true
+            sleep 5
+          fi
+
+          # 2. Sync state back to central repo
+          cd ${GITHUB_WORKSPACE}/filessss
+          git config user.name "Silver-kun"
+          git config user.email "silver-kun@users.noreply.github.com"
+          git fetch origin main || true
+          git reset --hard origin/main || true
+
+          echo "Zipping state (storage & sandbox)..."
+          (cd telegram_forwarder/hosting && zip -r -q ../../fleet_state.zip storage sandbox 2>/dev/null) || true
+
+          if [ -f fleet_state.zip ]; then
+            git add fleet_state.zip
+            if ! git diff --cached --quiet; then
+              echo "Pushing updated fleet_state.zip to Silver-kun/Filessss..."
+              git commit -m "Auto-refresh: update fleet state bundle (Cycle #${CYCLE_COUNT}) [skip ci]" || true
+              git push "https://${CLONE_PAT}@github.com/Silver-kun/Filessss.git" HEAD:main 2>/dev/null || true
+            else
+              echo "No state changes detected in fleet_state.zip."
+            fi
+          fi
+
+          # 3. Trigger successor runner
           REPOS=(
             "nova-matrix1/bot-relay"
             "silverdoesbusiness/bot-relay"
@@ -173,6 +239,7 @@ jobs:
             fi
           done
 
+          [ $CURRENT_INDEX -eq -1 ] && CURRENT_INDEX=0
           NEXT_INDEX=$(( (CURRENT_INDEX + 1) % ${#REPOS[@]} ))
           FALLBACK_INDEX=$(( (CURRENT_INDEX + 2) % ${#REPOS[@]} ))
           PRIMARY_TARGET="${REPOS[$NEXT_INDEX]}"
@@ -193,31 +260,25 @@ jobs:
             return 1
           }
 
-          send_tg_alert() {
-            local msg="$1"
-            python3 -c "import urllib.request, urllib.parse, json, sys; cfg=json.load(open('filessss/telegram_forwarder/config.json')); t=cfg.get('bot_token'); c=cfg.get('owner_id'); data=urllib.parse.urlencode({'chat_id': c, 'text': sys.argv[1], 'parse_mode': 'HTML'}).encode(); urllib.request.urlopen(f'https://api.telegram.org/bot{t}/sendMessage', data=data, timeout=8)" "$msg" 2>/dev/null || true
-          }
-
-          if dispatch_runner "$PRIMARY_TARGET" "$NEXT_PAT"; then
-            send_tg_alert "MasterBot Relay Handover Cycle: #${NEXT_CYCLE} -> Next Active Node: ${PRIMARY_TARGET}"
-          else
-            echo "Primary dispatch failed. Engaging fallback..."
-            if dispatch_runner "$FALLBACK_TARGET" "$FALLBACK_PAT"; then
-              send_tg_alert "MasterBot Fallback Handover Cycle: #${NEXT_CYCLE} -> ${FALLBACK_TARGET}"
-            fi
+          if ! dispatch_runner "$PRIMARY_TARGET" "$NEXT_PAT"; then
+            echo "Primary dispatch failed. Activating fallback: ${FALLBACK_TARGET}..."
+            dispatch_runner "$FALLBACK_TARGET" "$FALLBACK_PAT" || echo "CRITICAL: All dispatches failed!"
           fi
 
-          echo "Successor triggered. Running until predecessor cancellation signal arrives..."
+          echo "Successor triggered. Standing by for predecessor termination..."
           for wait_min in {1..10}; do
             sleep 60
-            echo "[$(date +'%T')] Outgoing node active & serving (handoff wait +${wait_min}m)..."
+            echo "[$(date +'%T')] Outgoing node in shutdown cooldown (+${wait_min}m)..."
           done
 
+      # =====================================================================
+      # STEP 7: FINAL CLEANUP
+      # =====================================================================
       - name: Final Teardown Safety Cleanup
         if: always()
         run: |
-          echo "Terminating MasterDaemon and child processes cleanly..."
-          PID=$(cat /tmp/daemon.pid 2>/dev/null || echo "")
+          echo "=== Final Teardown Safety Cleanup ==="
+          PID=$(cat /tmp/panel.pid 2>/dev/null || echo "")
           if [ -n "$PID" ]; then
             kill -15 $PID 2>/dev/null || true
           fi
