@@ -210,7 +210,7 @@ jobs:
           git reset --hard origin/main || true
 
           echo "Zipping state (storage & sandbox)..."
-          (cd telegram_forwarder/hosting && zip -r -q ../../fleet_state.zip storage sandbox 2>/dev/null) || true
+          (cd telegram_forwarder/hosting && zip -r -q ../../fleet_state.zip storage sandbox -x "*/.deps/*" -x "*/__pycache__/*" -x "*/.tmp_run/*" 2>/dev/null) || true
 
           if [ -f fleet_state.zip ]; then
             git add fleet_state.zip
