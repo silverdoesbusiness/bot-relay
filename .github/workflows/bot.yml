@@ -123,8 +123,8 @@ jobs:
           fi
 
           if [ -f filessss/fleet_state.zip ]; then
-            echo "Found previous fleet_state.zip. Unpacking..."
-            unzip -q -o filessss/fleet_state.zip -d "" || true
+            echo "Found previous fleet_state.zip. Unpacking into $HOSTING_DIR..."
+            unzip -q -o filessss/fleet_state.zip -d "$HOSTING_DIR" || true
             ls -la "$HOSTING_DIR/storage" 2>/dev/null || true
             ls -la "$HOSTING_DIR/sandbox" 2>/dev/null || true
           else
