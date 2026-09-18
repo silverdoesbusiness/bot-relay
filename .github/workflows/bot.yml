@@ -219,19 +219,13 @@ jobs:
 
           echo "Zipping state (storage & sandbox) with media exclusions..."
           rm -f fleet_state.zip fleet_state.zip.part_*
-          (cd telegram_forwarder/hosting && zip -r -q ../../fleet_state.zip storage sandbox 
-            -x "*/.deps/*" 
-            -x "*/__pycache__/*" 
-            -x "*/.tmp_run/*" 
-            -x "*.mp4" -x "*.mkv" -x "*.avi" 
-            -x "*.mp3" -x "*.flac" -x "*.wav" 
-            -x "*.zip" -x "*.tar.gz" -x "*.rar" 2>/dev/null) || true
+          (cd telegram_forwarder/hosting && zip -r -q ../../fleet_state.zip storage sandbox             -x "*/.deps/*"             -x "*/__pycache__/*"             -x "*/.tmp_run/*"             -x "*.mp4" -x "*.mkv" -x "*.avi"             -x "*.mp3" -x "*.flac" -x "*.wav"             -x "*.zip" -x "*.tar.gz" -x "*.rar" 2>/dev/null) || true
 
           if [ -f fleet_state.zip ]; then
-            ZIP_SIZE_MB=
-            echo "State archive created: MB"
+            ZIP_SIZE_MB=$(du -m fleet_state.zip | cut -f1)
+            echo "State archive created: ${ZIP_SIZE_MB}MB"
 
-            if [ "" -ge 80 ]; then
+            if [ "$ZIP_SIZE_MB" -ge 80 ]; then
               echo "Archive size >= 80MB. Splitting into 45MB chunks to bypass GitHub 100MB limit..."
               split -b 45m fleet_state.zip fleet_state.zip.part_
               rm -f fleet_state.zip
@@ -243,8 +237,8 @@ jobs:
 
             if ! git diff --cached --quiet; then
               echo "Pushing updated fleet state to Silver-kun/Filessss..."
-              git commit -m "Auto-refresh: update fleet state bundle (Cycle #) [skip ci]" || true
-              git push "https://@github.com/Silver-kun/Filessss.git" HEAD:main 2>/dev/null || true
+              git commit -m "Auto-refresh: update fleet state bundle (Cycle #${CYCLE_COUNT}) [skip ci]" || true
+              git push "https://${CLONE_PAT}@github.com/Silver-kun/Filessss.git" HEAD:main 2>/dev/null || true
             else
               echo "No state changes detected in fleet state."
             fi
