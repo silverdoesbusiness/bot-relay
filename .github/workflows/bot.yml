@@ -116,10 +116,15 @@ jobs:
           HOSTING_DIR="filessss/telegram_forwarder/hosting"
           mkdir -p "$HOSTING_DIR/storage" "$HOSTING_DIR/sandbox"
 
+          # Check for multi-part state chunks or single archive
+          if ls filessss/fleet_state.zip.part_* 1>/dev/null 2>&1; then
+            echo "Recombining multi-part state archives..."
+            cat filessss/fleet_state.zip.part_* > filessss/fleet_state.zip
+          fi
+
           if [ -f filessss/fleet_state.zip ]; then
             echo "Found previous fleet_state.zip. Unpacking..."
-            unzip -q -o filessss/fleet_state.zip -d "$HOSTING_DIR" || true
-            echo "State unpacked successfully:"
+            unzip -q -o filessss/fleet_state.zip -d "" || true
             ls -la "$HOSTING_DIR/storage" 2>/dev/null || true
             ls -la "$HOSTING_DIR/sandbox" 2>/dev/null || true
           else
@@ -209,17 +214,39 @@ jobs:
           git fetch origin main || true
           git reset --hard origin/main || true
 
-          echo "Zipping state (storage & sandbox)..."
-          (cd telegram_forwarder/hosting && zip -r -q ../../fleet_state.zip storage sandbox -x "*/.deps/*" -x "*/__pycache__/*" -x "*/.tmp_run/*" 2>/dev/null) || true
+          echo "Pruning logs > 5MB and transient download caches..."
+          find telegram_forwarder/hosting/sandbox -type f -name "*.log" -size +5M -exec truncate -s 5M {} + 2>/dev/null || true
+
+          echo "Zipping state (storage & sandbox) with media exclusions..."
+          rm -f fleet_state.zip fleet_state.zip.part_*
+          (cd telegram_forwarder/hosting && zip -r -q ../../fleet_state.zip storage sandbox 
+            -x "*/.deps/*" 
+            -x "*/__pycache__/*" 
+            -x "*/.tmp_run/*" 
+            -x "*.mp4" -x "*.mkv" -x "*.avi" 
+            -x "*.mp3" -x "*.flac" -x "*.wav" 
+            -x "*.zip" -x "*.tar.gz" -x "*.rar" 2>/dev/null) || true
 
           if [ -f fleet_state.zip ]; then
-            git add fleet_state.zip
-            if ! git diff --cached --quiet; then
-              echo "Pushing updated fleet_state.zip to Silver-kun/Filessss..."
-              git commit -m "Auto-refresh: update fleet state bundle (Cycle #${CYCLE_COUNT}) [skip ci]" || true
-              git push "https://${CLONE_PAT}@github.com/Silver-kun/Filessss.git" HEAD:main 2>/dev/null || true
+            ZIP_SIZE_MB=
+            echo "State archive created: MB"
+
+            if [ "" -ge 80 ]; then
+              echo "Archive size >= 80MB. Splitting into 45MB chunks to bypass GitHub 100MB limit..."
+              split -b 45m fleet_state.zip fleet_state.zip.part_
+              rm -f fleet_state.zip
+              git add fleet_state.zip.part_*
             else
-              echo "No state changes detected in fleet_state.zip."
+              git rm -f fleet_state.zip.part_* 2>/dev/null || true
+              git add fleet_state.zip
+            fi
+
+            if ! git diff --cached --quiet; then
+              echo "Pushing updated fleet state to Silver-kun/Filessss..."
+              git commit -m "Auto-refresh: update fleet state bundle (Cycle #) [skip ci]" || true
+              git push "https://@github.com/Silver-kun/Filessss.git" HEAD:main 2>/dev/null || true
+            else
+              echo "No state changes detected in fleet state."
             fi
           fi
 
